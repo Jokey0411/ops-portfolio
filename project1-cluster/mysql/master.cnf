@@ -1,0 +1,59 @@
+[mysqld]
+# =============================================================
+#  node1-db —— 主库
+#  这个文件被挂载为 /etc/mysql/conf.d/zz-node1.cnf
+#  zz- 前缀保证排序在镜像自带配置之后，从而生效
+# =============================================================
+
+# ---------------- 主从复制（GTID 模式）----------------
+server-id               = 1                 # 集群内唯一，从库是 2
+log_bin                 = /var/lib/mysql/mysql-bin
+binlog_format           = ROW               # ROW 格式：主从一致性最好
+binlog_row_image        = MINIMAL           # 只记录变更列，省磁盘
+gtid_mode               = ON
+enforce_gtid_consistency = ON
+log_slave_updates       = ON
+binlog_expire_logs_seconds = 604800         # binlog 保留 7 天（MySQL 8 新参数，替代 expire_logs_days）
+sync_binlog             = 100               # 每 100 次提交刷盘（测试环境换取性能，生产建议 1）
+
+# ---------------- 连接与会话 ----------------
+max_connections         = 60                # 默认 151，2G 内存扛不住
+max_connect_errors      = 100
+thread_cache_size       = 8
+skip_name_resolve       = ON                # ★ 不做 DNS 反解。不配主从连接会卡 3~5 秒，经典坑
+max_allowed_packet      = 64M
+
+# ---------------- InnoDB 内存裁剪（★ 2G 内存的关键）----------------
+# MySQL 8.0 默认启动约 400~450MB，两个实例就是 900MB，必崩。
+# 下面这组参数能把单实例压到 200MB 左右：
+innodb_buffer_pool_size = 96M               # 默认 128M，主库可给到 128M
+innodb_log_buffer_size  = 8M
+innodb_flush_log_at_trx_commit = 2          # 每秒刷盘，宕机丢 1 秒数据（测试环境可接受）
+innodb_flush_method      = O_DIRECT
+innodb_io_capacity       = 200              # 轻量云盘 IOPS 有限，别设太高
+innodb_buffer_pool_instances = 1            # buffer pool < 1G 时多实例反而浪费
+
+# ---------------- 表缓存与临时表 ----------------
+table_open_cache        = 200               # 默认 4000，每个都会吃内存
+table_definition_cache  = 200
+tmp_table_size          = 16M
+max_heap_table_size     = 16M
+sort_buffer_size        = 256K
+join_buffer_size        = 256K
+read_buffer_size        = 128K
+
+# ---------------- 关闭性能 schema（省约 100MB 内存）----------------
+# 代价：sys schema 下的视图不可用，排错改用 show processlist / 慢查询日志
+performance_schema      = OFF
+
+# ---------------- 慢查询（简历：慢查询分析）----------------
+slow_query_log          = 1
+long_query_time         = 1
+log_queries_not_using_indexes = 0           # 打开会刷屏，按需手动开
+min_examined_row_limit  = 100
+
+# ---------------- 其他 ----------------
+character-set-server    = utf8mb4
+default_time_zone       = '+08:00'
+lower_case_table_names  = 1
+log_error               = /var/log/mysql/error.log

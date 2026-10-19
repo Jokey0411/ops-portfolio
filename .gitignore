@@ -1,0 +1,30 @@
+# ---- 运行时产物（不入库）----
+backup/
+logs/
+*.sql.gz
+*.tar.gz
+*.log
+
+# ---- 敏感信息（绝不入库）----
+.env
+.env.notify
+*.pem
+*.key
+id_rsa
+id_ed25519
+id_ecdsa
+*_rsa
+*_ed25519
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

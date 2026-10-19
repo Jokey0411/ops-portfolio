@@ -1,0 +1,60 @@
+[mysqld]
+# =============================================================
+#  node2-db —— 从库
+#  挂载为 /etc/mysql/conf.d/zz-node2.cnf
+# =============================================================
+
+# ---------------- 主从复制（GTID）----------------
+server-id               = 2                 # ★ 必须与主库不同，否则复制直接失败
+log_bin                 = /var/lib/mysql/mysql-bin
+binlog_format           = ROW
+gtid_mode               = ON
+enforce_gtid_consistency = ON
+log_slave_updates       = ON
+binlog_expire_logs_seconds = 604800
+
+# ---------------- 只读（从库防误写）----------------
+read_only               = ON                # 普通用户只读；root 仍可写
+# super_read_only       = ON                # 想连 root 也禁写时打开（注意：会挡住手工修复）
+
+# ---------------- 并行复制（★ 面试加分点）----------------
+# MySQL 8.0 基于 WRITESET 的并行复制，能显著降低主从延迟
+slave_parallel_type     = LOGICAL_CLOCK
+slave_parallel_workers  = 2                 # 2 核机器，2 个 worker 正好
+slave_preserve_commit_order = 1
+replica_parallel_type     = LOGICAL_CLOCK    # 8.0.26+ 新参数名，兼容两种写法
+replica_parallel_workers  = 2
+
+# ---------------- 连接与会话 ----------------
+max_connections         = 60
+thread_cache_size       = 8
+skip_name_resolve       = ON
+max_allowed_packet      = 64M
+
+# ---------------- InnoDB 内存裁剪 ----------------
+innodb_buffer_pool_size = 96M
+innodb_log_buffer_size  = 8M
+innodb_flush_log_at_trx_commit = 2
+innodb_flush_method      = O_DIRECT
+innodb_io_capacity       = 200
+innodb_buffer_pool_instances = 1
+
+table_open_cache        = 200
+table_definition_cache  = 200
+tmp_table_size          = 16M
+max_heap_table_size     = 16M
+sort_buffer_size        = 256K
+join_buffer_size        = 256K
+
+performance_schema      = OFF
+
+# ---------------- 慢查询 ----------------
+slow_query_log          = 1
+long_query_time         = 1
+min_examined_row_limit  = 100
+
+# ---------------- 其他 ----------------
+character-set-server    = utf8mb4
+default_time_zone       = '+08:00'
+lower_case_table_names  = 1
+log_error               = /var/log/mysql/error.log

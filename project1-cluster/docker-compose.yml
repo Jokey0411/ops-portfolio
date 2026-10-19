@@ -1,0 +1,190 @@
+# =============================================================
+#  项目一：多机模拟 Web 业务集群
+#  一台 2C2G 主机，用 4 个 Docker 网络隔离出 2 个"节点" + 1 个 LB
+#
+#  网络拓扑：
+#    front      172.20.0.0/24   LB + 两节点 Nginx（对外服务网）
+#    net-node1  172.21.0.0/24   node1 内部（web → app → db）
+#    net-node2  172.22.0.0/24   node2 内部
+#    net-db     172.23.0.0/24   主从复制专网（只有两个 MySQL 能进）
+#
+#  设计要点（面试会问）：
+#   1. 每个节点内部三层（web/app/db），db 只在本节点网络内，不对前端暴露
+#   2. 主从复制走独立网络，与业务流量隔离
+#   3. 用 network alias 让两个节点复用同一份 nginx 配置
+# =============================================================
+
+name: cluster-p1
+
+x-mysql-base: &mysql-base
+  image: mysql:8.0
+  restart: unless-stopped
+  stop_grace_period: 30s
+  command:
+    - --default-authentication-plugin=mysql_native_password
+    - --character-set-server=utf8mb4
+    - --collation-server=utf8mb4_0900_ai_ci
+    - --slow-query-log=1
+    - --long-query-time=1
+  environment:
+    MYSQL_ROOT_PASSWORD: "Root@123456"
+    MYSQL_DATABASE: "shop"
+    MYSQL_USER: "app"
+    MYSQL_PASSWORD: "App@123456"
+    TZ: "Asia/Shanghai"
+  healthcheck:
+    test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+    interval: 15s
+    timeout: 5s
+    retries: 8
+    start_period: 60s
+
+services:
+  # ---------------- 负载均衡 ----------------
+  lb:
+    image: nginx:1.25-alpine
+    container_name: lb
+    hostname: lb
+    ports:
+      - "80:80"
+      - "8400:8400"
+    volumes:
+      - ./nginx/lb.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./logs/nginx-lb:/var/log/nginx
+    networks:
+      front:
+        ipv4_address: 172.20.0.10
+    depends_on:
+      node1-web: { condition: service_started }
+      node2-web: { condition: service_started }
+
+  # ================= 节点 1 =================
+  node1-web:
+    image: nginx:1.25-alpine
+    container_name: node1-web
+    hostname: node1-web
+    volumes:
+      - ./nginx/node.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./www:/usr/share/nginx/html:ro
+      - ./logs/nginx-node1:/var/log/nginx
+    networks:
+      front:
+        ipv4_address: 172.20.0.11
+      net-node1:
+        ipv4_address: 172.21.0.11
+
+  node1-app:
+    build: ./app
+    container_name: node1-app
+    hostname: node1-app
+    environment:
+      DB_HOST: "node1-db"
+      DB_PORT: "3306"
+      DB_USER: "app"
+      DB_PASS: "App@123456"
+      DB_NAME: "shop"
+      NODE_ID: "node1"
+    networks:
+      net-node1:
+        ipv4_address: 172.21.0.12
+        aliases:
+          - app          # ★ 关键：让 node1-web 用 http://app:8080 访问本节点应用
+    depends_on:
+      node1-db: { condition: service_healthy }
+
+  node1-db:
+    <<: *mysql-base
+    container_name: node1-db
+    hostname: node1-db
+    volumes:
+      - ./mysql/master.cnf:/etc/mysql/conf.d/zz-node1.cnf:ro
+      - db-node1:/var/lib/mysql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./logs/mysql-node1:/var/log/mysql
+    networks:
+      net-node1:
+        ipv4_address: 172.21.0.13
+      net-db:
+        ipv4_address: 172.23.0.11
+
+  # ================= 节点 2 =================
+  node2-web:
+    image: nginx:1.25-alpine
+    container_name: node2-web
+    hostname: node2-web
+    volumes:
+      - ./nginx/node.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./www:/usr/share/nginx/html:ro
+      - ./logs/nginx-node2:/var/log/nginx
+    networks:
+      front:
+        ipv4_address: 172.20.0.12
+      net-node2:
+        ipv4_address: 172.22.0.11
+
+  node2-app:
+    build: ./app
+    container_name: node2-app
+    hostname: node2-app
+    environment:
+      DB_HOST: "node2-db"
+      DB_PORT: "3306"
+      DB_USER: "app"
+      DB_PASS: "App@123456"
+      DB_NAME: "shop"
+      NODE_ID: "node2"
+      READ_ONLY: "1"        # 从库节点：写操作走主库，这里只读
+    networks:
+      net-node2:
+        ipv4_address: 172.22.0.12
+        aliases:
+          - app
+    depends_on:
+      node2-db: { condition: service_healthy }
+
+  node2-db:
+    <<: *mysql-base
+    container_name: node2-db
+    hostname: node2-db
+    # 注意：从库不挂 init.sql —— 真实环境中从库数据是从主库 dump 过来的
+    volumes:
+      - ./mysql/slave.cnf:/etc/mysql/conf.d/zz-node2.cnf:ro
+      - db-node2:/var/lib/mysql
+      - ./logs/mysql-node2:/var/log/mysql
+    networks:
+      net-node2:
+        ipv4_address: 172.22.0.13
+      net-db:
+        ipv4_address: 172.23.0.12
+
+networks:
+  front:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+  net-node1:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+          gateway: 172.21.0.1
+  net-node2:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+          gateway: 172.22.0.1
+  net-db:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.23.0.0/24
+          gateway: 172.23.0.1
+
+volumes:
+  db-node1:
+    name: cluster_p1_db_node1
+  db-node2:
+    name: cluster_p1_db_node2
