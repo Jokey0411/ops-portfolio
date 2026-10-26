@@ -59,10 +59,6 @@ async function refresh() {
 
   // 2) 应用健康 + 数据库连接
   try {
-    const r = await fetch('/api/../health', {cache:'no-store'});
-  } catch (e) {}
-
-  try {
     const r = await fetch('/health', {cache:'no-store'});
     const j = await r.json();
     out.health = j;

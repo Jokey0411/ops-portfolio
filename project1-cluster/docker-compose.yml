@@ -42,7 +42,7 @@ x-mysql-base: &mysql-base
 services:
   # ---------------- 负载均衡 ----------------
   lb:
-    image: nginx:1.25-alpine
+    image: nginx:1.27-alpine
     container_name: lb
     hostname: lb
     ports:
@@ -60,7 +60,7 @@ services:
 
   # ================= 节点 1 =================
   node1-web:
-    image: nginx:1.25-alpine
+    image: nginx:1.27-alpine
     container_name: node1-web
     hostname: node1-web
     volumes:
@@ -109,7 +109,7 @@ services:
 
   # ================= 节点 2 =================
   node2-web:
-    image: nginx:1.25-alpine
+    image: nginx:1.27-alpine
     container_name: node2-web
     hostname: node2-web
     volumes:

@@ -1,0 +1,12 @@
+# 自动与 docker-compose.yml 合并，不用改原文件
+services:
+  lb:
+    restart: unless-stopped
+  node1-web:
+    restart: unless-stopped
+    depends_on:
+      node1-app: { condition: service_started }
+  node2-web:
+    restart: unless-stopped
+    depends_on:
+      node2-app: { condition: service_started }

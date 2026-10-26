@@ -9,7 +9,7 @@ name: lnmp-p2
 
 services:
   nginx:
-    image: nginx:1.25-alpine
+    image: nginx:1.27-alpine
     container_name: lnmp-nginx
     hostname: lnmp-nginx
     ports:
