@@ -3,6 +3,8 @@
 > 对应简历：「Docker Compose 编排 Nginx+PHP-FPM+MySQL 8.0，配置网络与数据卷；
 > Shell 脚本每日备份保留 7 天；docker logs 排查容器启动失败/端口冲突/权限异常；
 > SQL 索引优化」
+>
+> 逐步操作见 [`docs/07-项目二执行步骤.md`](../docs/07-项目二执行步骤.md)（D6–D7）。
 
 ---
 
@@ -92,13 +94,19 @@ bash scripts/bench.sh after
 
 ### Step 8：备份 + 恢复演练
 ```bash
-bash scripts/mysql_backup.sh        # 手动跑一次
+bash scripts/mysql_backup.sh        # 数据库：手动跑一次
+bash scripts/code_backup.sh         # 代码：git bundle / tar，保留 7 天
+bash scripts/backup_heartbeat.sh    # 心跳自检：最新备份超 26h 未更新即告警
 bash scripts/restore_test.sh        # ★ 必做：验证备份真的能恢复
 crontab -e
 # 写入（第一行 PATH 必须有，否则 cron 找不到 docker/mysqldump）：
 # PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# 0 3 * * * /opt/ops/project2-lnmp/scripts/mysql_backup.sh >> /opt/ops/logs/scripts/lnmp-backup-cron.log 2>&1
+# 0 3 * * * /opt/ops/project2-lnmp/scripts/mysql_backup.sh     >> /opt/ops/logs/scripts/lnmp-backup-cron.log 2>&1
+# 30 3 * * * /opt/ops/project2-lnmp/scripts/code_backup.sh      >> /opt/ops/logs/scripts/code-backup-cron.log 2>&1
+# 0 9 * * * /opt/ops/project2-lnmp/scripts/backup_heartbeat.sh >> /opt/ops/logs/scripts/backup-heartbeat.log 2>&1
 ```
+> 备份三件套：**数据库备份 + 代码备份 + 告警通知**，再加**心跳兜底**——脚本失败会告警，但如果 cron 没生效/机器重启过导致脚本根本没跑，只有心跳检测（查最新备份文件年龄）才能发现。告警渠道见 `scripts/notify.sh`（钉钉/飞书/邮件），需配 `/opt/ops/.env.notify`。
+
 
 ---
 
@@ -190,8 +198,10 @@ docker network inspect lnmp-p2_lnmp-net
 - [ ] 索引已建，`bench.sh after` 有输出
 - [ ] **对比表已填真实数字**
 - [ ] 备份脚本执行成功，7 天保留生效
+- [ ] 代码备份（`code_backup.sh`）有产物（`.bundle` / `.tar.gz`）
+- [ ] 心跳脚本（`backup_heartbeat.sh`）输出 `[SUCCESS] 心跳正常`
 - [ ] **恢复演练通过**
-- [ ] crontab 已挂
+- [ ] crontab 已挂（库 03:00 / 代码 03:30 / 心跳 09:00）
 
 ---
 

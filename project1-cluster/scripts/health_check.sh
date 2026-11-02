@@ -13,6 +13,8 @@ MYSQL_PASS="Root@123456"
 DISK_THRESHOLD=85
 MEM_THRESHOLD=90
 LAG_THRESHOLD=30        # 主从延迟超过 30 秒告警
+# compose 的 name: cluster-p1 → 网络全名 cluster-p1_front（改了项目名要同步这里）
+FRONT_NET="${FRONT_NET:-cluster-p1_front}"
 
 mkdir -p "$LOG_DIR"
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
@@ -42,7 +44,17 @@ else
 fi
 
 for n in node1-web node2-web; do
-    ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$n" 2>/dev/null | head -1)
+    # ★ 节点同时接 front + net-nodeX 两个网络，range 会把两个 IP 首尾拼成一串
+    #   （172.20.0.11 + 172.21.0.11 → "172.20.0.11172.21.0.11"），curl 必然 000
+    #   必须按网络名精确取：compose 的 name 是 cluster-p1，网络全名 cluster-p1_front
+    ip=$(docker inspect -f "{{with index .NetworkSettings.Networks \"${FRONT_NET}\"}}{{.IPAddress}}{{end}}" "$n" 2>/dev/null)
+    if [[ -z "$ip" ]]; then
+        # 兜底：网络名对不上时，取任意一个 172.20.x 的地址
+        ip=$(docker inspect "$n" 2>/dev/null | python3 -c '
+import json,sys
+nets=json.load(sys.stdin)[0]["NetworkSettings"]["Networks"]
+print(next((v["IPAddress"] for v in nets.values() if v["IPAddress"].startswith("172.20.")), ""))' 2>/dev/null)
+    fi
     code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 "http://${ip}/healthz" 2>/dev/null)
     if [[ "$code" == "200" ]]; then
         log "  ✔ $n(${ip}) /healthz 200"
@@ -63,7 +75,9 @@ if [[ -z "$SLAVE_OUT" ]]; then
 else
     IO_RUN=$(echo "$SLAVE_OUT"  | grep -m1 'Replica_IO_Running:'  | awk '{print $2}')
     SQL_RUN=$(echo "$SLAVE_OUT" | grep -m1 'Replica_SQL_Running:' | awk '{print $2}')
-    LAG=$(echo "$SLAVE_OUT"     | grep -m1 'Seconds_Behind_Master:' | awk '{print $2}')
+    # ★ MySQL 8.0.23+ 把字段名从 Seconds_Behind_Master 改成 Seconds_Behind_Source，
+    #   只 grep Master 会永远取到空值，延迟检查等于失效
+    LAG=$(echo "$SLAVE_OUT"     | grep -m1 -E 'Seconds_Behind_(Source|Master):' | awk '{print $2}')
     LAST_ERR=$(echo "$SLAVE_OUT" | grep -m1 'Last_Error:' | sed 's/^ *Last_Error: //')
     log "  IO线程=${IO_RUN}  SQL线程=${SQL_RUN}  延迟=${LAG}s"
 

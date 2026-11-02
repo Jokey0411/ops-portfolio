@@ -209,9 +209,16 @@ cat <<EOF
  Docker   : $(docker --version 2>/dev/null | head -1)
  防火墙   : $(systemctl is-active firewalld)  放通端口: $(firewall-cmd --list-ports)
 
- 下一步:
+ 下一步（照 /opt/ops/README.md 的 D0-D7 手册走）:
    cd /opt/ops/project1-cluster
-   bash scripts/../README.md 里的步骤依次执行
+   docker compose up -d --build
+   docker compose ps
+   bash scripts/setup_replication.sh
 
- ⚠ 提醒：如果服务器重启过，请重新登录让 ulimit 生效
+ 备份脚本要能跑，先建好告警配置:
+   cp /opt/ops/env.notify.example /opt/ops/.env.notify && chmod 600 /opt/ops/.env.notify
+
+ ⚠ 提醒：
+   1. ulimit 需重新登录才生效（或 reboot）
+   2. 腾讯云控制台防火墙要另外放行 80/8080/8400，只配 firewalld 外网仍进不来
 EOF

@@ -49,17 +49,32 @@ GTID=$(m "SELECT @@gtid_mode")
 [[ "$GTID" == "ON" ]] || { err "主库 gtid_mode=${GTID}，必须为 ON"; exit 1; }
 log "  gtid_mode=${GTID}"
 
-# ---------- 3. 从主库 dump 全量数据 ----------
-log "[3/6] 从主库导出全量数据（--single-transaction 不锁表）"
+# ---------- 3. 从主库 dump 业务库 ----------
+log "[3/6] 从主库导出业务库（--single-transaction 不锁表）"
 DUMP="/tmp/master_dump_$(date +%s).sql"
+# ★ 两个关键点（都是踩过的坑）：
+#  1) 只导业务库 shop，绝不能 --all-databases —— 会把主库的 mysql 系统库一起倒进去，
+#     覆盖从库自己的 mysql.user / 权限表，严重时从库连 root 都登不上
+#  2) 不要 --set-gtid-purged=OFF —— 必须让 dump 头部写入 SET @@GLOBAL.GTID_PURGED，
+#     告诉从库"这些事务我已有"。关掉的话从库 gtid_executed 是空的，
+#     AUTO_POSITION 会认为从库啥都没有，从第一笔事务开始重放，
+#     撞上刚导入的库表 → Worker 报错 → Replica_SQL_Running: No
 docker exec -e MYSQL_PWD="$ROOT_PASS" "$MASTER" mysqldump -uroot \
     --single-transaction --quick --routines --triggers --events \
-    --set-gtid-purged=OFF --all-databases > "$DUMP" 2>/dev/null
+    --databases shop > "$DUMP" 2>/dev/null
 if [[ ! -s "$DUMP" ]]; then err "导出失败或文件为空"; exit 1; fi
-log "  导出完成：$(du -h "$DUMP" | cut -f1)"
+grep -q "GTID_PURGED" "$DUMP" || { err "dump 里没有 GTID_PURGED，导入后从库会从头重放"; exit 1; }
+log "  导出完成：$(du -h "$DUMP" | cut -f1)（含 GTID_PURGED）"
 
-# ---------- 4. 导入从库 ----------
-log "[4/6] 导入从库"
+# ---------- 4. 重置从库 GTID 状态并导入 ----------
+log "[4/6] 重置从库并导入"
+# GTID_PURGED 只能写入 gtid_executed 为空的实例，所以必须先清干净再导入。
+# ★ 顺序不能反：DROP 库会产生一个新 GTID，所以要先 DROP、后 RESET MASTER，
+#   否则 RESET 完再 DROP，gtid_executed 又不空了，导入时 GTID_PURGED 直接报错。
+s "STOP REPLICA;"      2>/dev/null
+s "RESET REPLICA ALL;" 2>/dev/null
+s "DROP DATABASE IF EXISTS shop;" 2>/dev/null
+s "RESET MASTER;"      2>/dev/null
 docker exec -i -e MYSQL_PWD="$ROOT_PASS" "$SLAVE" mysql -uroot < "$DUMP" 2>/dev/null
 log "  导入完成，从库表数量：$(s "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('mysql','sys','performance_schema','information_schema')")"
 

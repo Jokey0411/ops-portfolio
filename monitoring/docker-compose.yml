@@ -1,0 +1,190 @@
+# =============================================================
+#  Zabbix 7.0 LTS —— 监控告警平台
+#  独立于项目一，单独启停；只「向上依赖」项目一，绝不反向依赖
+#
+#  为什么单独一个 compose（面试会问）：
+#   1. 生命周期不同：监控要比被监控对象活得久，项目一 down 掉它不能跟着死
+#   2. 依赖方向单一：监控 → 项目一，单向；混在一起会形成 depends_on 环
+#   3. 可单独撤离：内存吃紧时 docker compose stop，业务不受影响
+#
+#  内存预算（2G 机器的生死线）：
+#   postgres 256M + server 400M + web 256M + agent 64M = 上限 976M，实测约 500M
+#   → 项目一(约 1.1G) + 系统(约 250M) + Zabbix(约 500M) ≈ 1.85G
+#   → ★ 必须先把项目二 down 掉，否则三个一起上必然 OOM
+#
+#  端口规划（80 已被项目一 lb 占用）：
+#    8080  → Zabbix Web      （宿主机发布，安全组要放通）
+#   10051  → Zabbix Server   （agent 上报 / 主动模式）
+#   10050  → Zabbix Agent2   （server 拉取）
+# =============================================================
+
+name: monitoring
+
+# 数据库连接参数：这三个服务都要用，抽成锚点避免写三遍出错
+x-db-env: &db-env
+  POSTGRES_USER: zabbix
+  POSTGRES_PASSWORD: ${ZBX_DB_PASSWORD:-ZbxPg@2026}
+  POSTGRES_DB: zabbix
+  TZ: Asia/Shanghai
+
+services:
+  # ---------- 1. 数据库：PostgreSQL 比 MySQL 省一半内存 ----------
+  # 选 pg 不选 mysql 的理由：Zabbix 官方两种都支持，但 pg 在同等数据量下
+  # shared_buffers 更省、启动更快。2G 机器上这点内存是实打实的。
+  postgres:
+    image: postgres:16-alpine
+    container_name: zbx-postgres
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - max_connections=60
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=32MB
+    environment:
+      <<: *db-env
+    volumes:
+      - zbx-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zabbix -d zabbix"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 256m
+    networks: [zbx]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ---------- 2. 核心：Zabbix Server ----------
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-7.0-latest
+    container_name: zbx-server
+    restart: unless-stopped
+    environment:
+      <<: *db-env
+      DB_SERVER_HOST: postgres
+      # ★ 下面这几个 cache 是内存大头，默认值对 2G 机器太奢侈
+      ZBX_CACHESIZE: 32M
+      ZBX_HISTORYCACHESIZE: 16M
+      ZBX_HISTORYINDEXCACHESIZE: 4M
+      ZBX_TRENDCACHESIZE: 4M
+      ZBX_VALUECACHESIZE: 8M
+      # 采集并发压到最低：7 个容器 + 1 台主机，5 个 poller 绰绰有余
+      ZBX_STARTPOLLERS: 5
+      ZBX_STARTPINGERS: 1
+      ZBX_STARTDISCOVERERS: 1
+      ZBX_STARTHTTPPOLLERS: 1
+      ZBX_STARTTRAPPERS: 2
+      # ★ 显式写 0，把「有意关掉」变成配置的一部分，而不是靠默认值
+      #   这三个是 7.0 新增的报表/虚拟化能力，本项目用不上：
+      #   report writer/manager → 定时报表，且要先建额外表
+      #   vmware collector      → 采 vCenter，我们没有
+      #   不显式关也不会启动，但「Zabbix server health」模板照样会去采它们，
+      #   结果是 item 变 not supported 并每 10 分钟刷一次日志（见 README 坑③）
+      ZBX_STARTREPORTWRITERS: 0
+      ZBX_STARTREPORTMANAGERS: 0
+      ZBX_STARTVMWARECOLLECTORS: 0
+      # 超时放宽到 4s：MySQL 主从延迟那个脚本要 docker exec，冷启动偶尔超 3s
+      ZBX_TIMEOUT: 4
+      TZ: Asia/Shanghai
+    ports:
+      - "10051:10051"
+    volumes:
+      - zbx-scripts:/usr/lib/zabbix/externalscripts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 400m
+    # ★ server 要加入项目一的 front 网络：不是为了通信，是为了能用
+    #   HTTP agent 监控项去探 http://lb/lb-health（见 docs/09）
+    #   它是 external 网络，所以项目一必须先 up，否则本服务起不来
+    networks: [zbx, front]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ---------- 3. 前端：Web + Nginx + PHP-FPM 三合一 ----------
+  # 容器内 nginx 以非 root 监听 8080，所以映射 8080:8080（不能改容器内端口）
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-7.0-latest
+    container_name: zbx-web
+    restart: unless-stopped
+    environment:
+      <<: *db-env
+      DB_SERVER_HOST: postgres
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_PORT: 10051
+      PHP_TZ: Asia/Shanghai
+      ZBX_FRONTEND_LANGUAGE: zh_CN
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+    mem_limit: 256m
+    networks: [zbx]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ---------- 4. 采集端：Agent2（监控宿主机 + 7 个容器） ----------
+  # 为什么用 agent2 而不是老 agent：agent2 内置 Docker 插件，
+  # 不用额外装脚本就能拿到每个容器的 CPU/内存/状态，这是全套监控的基础。
+  zabbix-agent2:
+    image: zabbix/zabbix-agent2:alpine-7.0-latest
+    container_name: zbx-agent2
+    restart: unless-stopped
+    # ★ pid: host 让容器内的 /proc 就是宿主机的 /proc，
+    #   否则内置模板采到的是容器自己的 CPU/内存，数字全是错的
+    pid: host
+    user: root
+    environment:
+      ZBX_HOSTNAME: VM-0-14-opencloudos
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_PORT: 10051
+      ZBX_ACTIVE_ALLOW: "true"
+      TZ: Asia/Shanghai
+    ports:
+      - "10050:10050"
+    volumes:
+      # ★ 只剩这一个挂载。
+      #   Docker 插件是原生 Go 实现，直接读 socket，**不需要 docker CLI**。
+      #   曾经这里还挂了 /usr/bin/docker（为了给 UserParameter 里 docker exec 用），
+      #   但 alpine 是 musl，宿主机 docker 是 glibc 动态链接的，执行报
+      #     exec /usr/bin/docker: no such file or directory
+      #   这不是文件不存在，是 ELF 装载器 /lib64/ld-linux-x86-64.so.2 不存在。
+      #   所以业务指标改成「宿主机 cron + scripts/host_checks.sh + zabbix_sender」推送，
+      #   agent2 只负责系统指标和容器指标。详见 README「采集架构」一节。
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # ★ agent2 是 Go 程序，不是 C 写的 agent（那个才 20MB）。
+    #   Go runtime + GC + Docker 插件，实测 RSS 45~70MB，采 7 个容器时更高。
+    #   给 64m 会随机 OOMKilled（exit 137），表现就是「容器起来又消失」。
+    #   192m 是官方文档建议的起步值，宿主机还有余量。
+    mem_limit: 192m
+    networks: [zbx]
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+networks:
+  # 监控自身的内部网络
+  zbx:
+    driver: bridge
+  # 项目一的对外服务网，已存在，这里只声明引用（compose 不会重建它）
+  front:
+    external: true
+    name: cluster-p1_front
+
+volumes:
+  # 命名卷：数据库数据落在这里，docker compose down 不会丢
+  # 只有 down -v 才会删，升级/重装时千万别加 -v
+  zbx-pgdata:
+  zbx-scripts:

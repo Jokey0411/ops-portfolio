@@ -48,6 +48,10 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _json(self, code, data):
+        # ★ default=str 兜住 pymysql 返回的非原生类型：
+        #   DECIMAL(金额) → Decimal、DATETIME → datetime，json 都不认识，
+        #   不处理会直接 500：Object of type Decimal is not JSON serializable
+        #   金额用字符串保精度，别转 float（0.1+0.2 那类问题）
         body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")

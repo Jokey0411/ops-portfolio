@@ -177,7 +177,7 @@ scp ops-portfolio.tar.gz root@你的公网IP:/root/
 ```bash
 # ② 服务器上
 mkdir -p /opt/ops
-tar xzf /root/ops-portfolio.tar.gz -C /opt/ops
+tar xzf /root/ops-portfolio.tar.gz -C /opt/ops --no-same-owner
 cd /opt/ops && ls
 
 # ③ 修换行符 + 权限（照总 README 步骤 0-5）
@@ -379,7 +379,7 @@ gh repo create ops-portfolio --public --confirm
 ls -la /opt/ops
 
 # ② 把文件放进去（Windows 上先 scp 上传 tar.gz）
-tar xzf /root/ops-portfolio.tar.gz -C /opt/ops
+tar xzf /root/ops-portfolio.tar.gz -C /opt/ops --no-same-owner
 cd /opt/ops
 
 # ③ 修换行符 + 权限
@@ -487,7 +487,7 @@ scp -i C:\Users\34794\.ssh\id_ed25519 ops-portfolio.tar.gz root@111.231.169.180:
 ```bash
 # 服务器
 cd /opt/ops
-tar xzf /root/ops-portfolio.tar.gz -C /opt/ops
+tar xzf /root/ops-portfolio.tar.gz -C /opt/ops --no-same-owner
 find . -name "*.sh" -exec sed -i 's/\r$//' {} \; -exec chmod +x {} \;
 git add . && git commit -m "init: 高可用集群 + LNMP 运维方案"
 git push -u origin main
@@ -573,6 +573,30 @@ bash -n 00-init-server.sh && echo "语法 OK"
 > 走 GitHub 上传的文件，`.sh` 在仓库里存的是 LF（`.gitattributes` 锁死了），
 > 但保险起见还是跑一遍 `sed`，反正无害。
 
+### 路径 A 的偷懒版：只传一个压缩包（推荐）
+
+45 个文件一个个拖太麻烦。改成**只上传 `ops-portfolio.tar.gz` 这一个文件**，让服务器自己解开：
+
+**① 网页上传**：`https://github.com/Jokey0411/ops-portfolio` → **Add file → Upload files**
+→ 拖入 `C:\Users\34794\WorkBuddy\Linux\ops-portfolio.tar.gz` → **Commit changes**
+
+**② 服务器拉下来 + 解压 + 摊平**
+```bash
+cd /opt/ops
+git pull origin main
+ls -lh ops-portfolio.tar.gz            # 确认包到了
+
+tar xzf ops-portfolio.tar.gz -C /opt/ops --no-same-owner    # 就地解开（包内就是散文件，没有顶层目录）
+rm -f ops-portfolio.tar.gz
+find . -name "*.sh" -exec sed -i 's/\r$//' {} \; -exec chmod +x {} \;
+
+git add . && git commit -m "init: 高可用集群 + LNMP 运维方案"
+git push -u origin main
+```
+
+推完之后仓库里就是**摊平的 45 个文件**（README.md、project1-cluster/ …），
+不是孤零零一个 tar.gz —— 面试给人看的时候才像样。
+
 ---
 
 ### 路径 B：把 Windows → 服务器 的 SSH 打通后再 scp
@@ -598,7 +622,7 @@ scp -i C:\Users\34794\.ssh\id_ed25519 ops-portfolio.tar.gz root@111.231.169.180:
 ```bash
 ls -lh /root/ops-portfolio.tar.gz     # 先确认包真的到了
 cd /opt/ops
-tar xzf /root/ops-portfolio.tar.gz -C /opt/ops
+tar xzf /root/ops-portfolio.tar.gz -C /opt/ops --no-same-owner
 find . -name "*.sh" -exec sed -i 's/\r$//' {} \; -exec chmod +x {} \;
 git add . && git commit -m "init: 高可用集群 + LNMP 运维方案"
 git push -u origin main
@@ -621,7 +645,72 @@ git push -u origin main
 
 ---
 
-## 十一、一句话速记
+## 十一、`detected dubious ownership` —— 解压把属主改成了陌生 uid
+
+```bash
+fatal: detected dubious ownership in repository at '/opt/ops'
+To add an exception for this directory, call:
+git config --global --add safe.directory /opt/ops
+```
+
+### 为什么会这样
+
+这个包是在 **Windows 上打的**，tar 里记录了 Windows 那边的 uid/gid（`34794/197609`）：
+
+```bash
+tar tvzf ops-portfolio.tar.gz | head -2
+# drwxr-xr-x 34794/197609      0 ... ./
+# -rw-r--r-- 34794/197609    492 ... ./.gitattributes
+```
+
+而 **GNU tar 以 root 身份解压时，默认 `--same-owner`（保留包内属主）**——
+注意 `./` 这个顶层条目也在包里，所以连 `/opt/ops` 目录本身都被 chown 成了 uid 34794。
+
+git 从 2.35.2 起加了安全保护：仓库属主不是**当前用户**时一律拒绝操作，
+防止你在别人的仓库里被恶意 `core.fsmonitor` 之类配置劫持。于是报这个错。
+
+### 修法（两条都做最稳）
+
+```bash
+# ① 治本：属主还给 root
+chown -R root:root /opt/ops
+
+# ② 治标：告诉 git 这个目录可信（万一 ① 没权限执行，这条也能单独生效）
+git config --global --add safe.directory /opt/ops
+
+# ③ 验证
+cd /opt/ops && git status
+```
+
+> `git config --global --add safe.directory '*'` 是"所有目录都放行"的懒人写法，
+> 安全性差一些，单人实验机无所谓，但不推荐写在文档里教别人。
+
+### 以后别再踩：解压加 `--no-same-owner`
+
+```bash
+tar xzf /root/ops-portfolio.tar.gz -C /opt/ops --no-same-owner
+```
+
+或者解压前就别让包记录陌生 uid —— **打包时锁死**（本项目已改用这条）：
+
+```bash
+tar czf ops-portfolio.tar.gz --exclude='.git' --owner=0 --group=0 .
+```
+
+> `--owner=0 --group=0` 把包内所有条目的属主写成 root，
+> 这样不管谁在什么机器上解压，拿到的都是 root 属主，一劳永逸。
+
+### 排错补充
+
+| 报错 | 含义 | 处理 |
+|---|---|---|
+| `detected dubious ownership` | 仓库属主 ≠ 当前用户 | `chown -R $USER:$USER <repo>` + `safe.directory` |
+| `chown: Operation not permitted` | 当前不是 root | `sudo -i` 后重试，或只加 safe.directory |
+| 目录里 mixed owner（部分 34794 部分 root） | 解压后又手动建过文件 | `chown -R` 整棵树统一即可 |
+
+---
+
+## 十二、一句话速记
 
 ```bash
 # ① 生成钥匙（文件名一定是 github_ed25519，别碰登录用的 id_ed25519）

@@ -57,7 +57,7 @@ async function refresh() {
     document.getElementById('time').textContent = tm ? tm[1] : '-';
   } catch (e) { document.getElementById('node').textContent = 'ERR'; }
 
-  // 2) 应用健康 + 数据库连接
+  // 2) 应用健康 + 数据库连接（nginx 把 /health 转发到 app:8080/health）
   try {
     const r = await fetch('/health', {cache:'no-store'});
     const j = await r.json();

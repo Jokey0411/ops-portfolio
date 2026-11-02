@@ -1,5 +1,8 @@
 FROM php:8.2-fpm-alpine
 
+# ★ 换清华源（境外 dl-cdn 拉 apk 跨境龟速，国内源快一个量级）
+RUN sed -i 's#dl-cdn.alpinelinux.org#mirrors.tuna.tsinghua.edu.cn#g' /etc/apk/repositories
+
 # 编译依赖（装完删掉，减小镜像层）
 RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
  && apk add --no-cache libzip-dev icu-dev \

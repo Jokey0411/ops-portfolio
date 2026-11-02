@@ -2,6 +2,8 @@
 
 > 对应简历：「2 台 CentOS 节点（Nginx+MySQL），firewall 安全策略及内核参数，
 > Shell + crontab 自动备份与告警，排查权限/端口故障并输出复盘文档」
+>
+> 逐步操作见 [`docs/06-项目一执行步骤.md`](../docs/06-项目一执行步骤.md)（D2–D5）。
 
 ---
 
@@ -65,18 +67,21 @@ chown -R 999:999 logs/mysql-node1 logs/mysql-node2
 ```bash
 docker compose up -d --build
 # 首次启动 MySQL 要初始化，等 60~90 秒
-docker compose ps      # 确认 6 个容器都是 Up (healthy)
+docker compose ps      # 确认 7 个容器都是 Up（db 会显示 healthy）
 ```
+> 7 个容器：`lb` / `node1-web` / `node1-app` / `node1-db` /
+> `node2-web` / `node2-app` / `node2-db`
 
 **如果镜像拉不下来**（国内访问 Docker Hub 经常失败）：
+
+见 **`../docs/03-Docker镜像与加速源.md`**。先跑探测脚本定位：
 ```bash
-# 改用腾讯云容器镜像仓库（内网，最稳）
-docker pull ccr.ccs.tencentyun.com/library/nginx:1.25-alpine
-docker pull ccr.ccs.tencentyun.com/library/mysql:8.0
-docker tag ccr.ccs.tencentyun.com/library/nginx:1.25-alpine nginx:1.25-alpine
-docker tag ccr.ccs.tencentyun.com/library/mysql:8.0 mysql:8.0
-docker compose up -d --build
+cd /opt/ops && bash scripts/mirror_probe.sh
 ```
+> ⚠️ 别手写 `ccr.ccs.tencentyun.com/library/...` 这种带域名前缀的镜像名 ——
+> 那会**绕过已配好的 registry-mirrors**，把自己锁死在单个源上，
+> 一旦该源没同步某个 tag 就直接 `manifest unknown`。
+> 配了 mirror 之后一律写官方原名（`nginx:1.27-alpine`），让 docker 自动换源。
 
 ### Step 2：验证负载均衡
 ```bash
@@ -140,10 +145,13 @@ ls -lh /opt/ops/backup/mysql/
 
 ### Step 6：故障演练（★ 最重要的一步）
 ```bash
-# LB 摘除演练
+# 当前目录必须是 /opt/ops/project1-cluster（根目录 /opt/ops 下也有个 scripts/，容易走错）
+cd /opt/ops/project1-cluster
+
+# LB 摘除演练：停 node1-web → 观察 20 次请求是否全 200 且都落到 node2 → 自动恢复
 bash scripts/failover_drill.sh node1-web 20
 
-# 然后按 docs/故障演练手册.md 逐个制造 6 个故障并排查
+# 然后按 docs/故障演练手册.md 逐个制造 7 个故障并排查
 # 每处理完一个，用 docs/故障复盘模板.md 写一份复盘
 ```
 
@@ -170,7 +178,7 @@ firewall-cmd --list-all
 
 ## 四、验证清单（做完打勾）
 
-- [ ] 6 个容器全部 Up (healthy)
+- [ ] 7 个容器全部 Up（两个 db 显示 healthy）
 - [ ] 连续请求能看到两个节点轮转
 - [ ] 主从复制双 Yes，主库写入从库能查到
 - [ ] 从库写入被拒绝（读写分离生效）
