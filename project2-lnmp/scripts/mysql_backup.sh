@@ -14,7 +14,6 @@ KEEP_DAYS="${KEEP_DAYS:-7}"
 MYSQL_USER="root"
 MYSQL_PASS="Root@123456"
 DATE=$(date '+%Y%m%d_%H%M%S')
-DAY=$(date '+%Y%m%d')
 
 mkdir -p "$BACKUP_DIR" "$(dirname "$LOG_FILE")"
 
@@ -39,7 +38,7 @@ fi
 log "待备份数据库: $(echo $DBS | tr '\n' ' ')"
 
 # ---------------- 2. 全库备份 ----------------
-FULL="${BACKUP_DIR}/full_${DAY}_${DATE}.sql"
+FULL="${BACKUP_DIR}/full_${DATE}.sql"
 log "[1/3] 全库备份 -> ${FULL}.gz"
 if docker exec -e MYSQL_PWD="$MYSQL_PASS" "$CONTAINER" mysqldump -u"$MYSQL_USER" \
         --single-transaction --quick --routines --triggers --events \
@@ -55,7 +54,7 @@ fi
 # ---------------- 3. 按库单独备份（便于单库恢复）----------------
 log "[2/3] 分库备份"
 for db in $DBS; do
-    F="${BACKUP_DIR}/${db}_${DAY}_${DATE}.sql"
+    F="${BACKUP_DIR}/${db}_${DATE}.sql"
     if docker exec -e MYSQL_PWD="$MYSQL_PASS" "$CONTAINER" mysqldump -u"$MYSQL_USER" \
             --single-transaction --quick --routines --triggers \
             --set-gtid-purged=OFF "$db" > "$F" 2>>"$LOG_FILE"; then
