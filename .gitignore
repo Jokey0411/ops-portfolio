@@ -28,3 +28,8 @@ venv/
 *.swp
 .DS_Store
 Thumbs.db
+
+# ---- 手工备份文件（服务器上临时留的，不入库）----
+*.bak
+*.bak[0-9]
+*.orig
