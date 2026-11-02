@@ -13,17 +13,27 @@ RESULT_LOG="${RESULT_LOG:-/opt/ops/logs/scripts/restore-test.log}"
 
 # 生产库（被校验对象）
 PROD_CONTAINER="${PROD_CONTAINER:-lnmp-mysql}"
-PROD_PASS="${PROD_PASS:-Root@123456}"
-
-# 临时恢复库
-TEST_CONTAINER="restore-test-$$"
-TEST_PASS="Restore@123"
-# ★ 限制 512m：2G 机器上生产 MySQL 已占 300~500m，
-#   不设上限时 Docker 会把宿主机吃满，直接触发 OOM Kill 把生产库一起干掉。
-TEST_MEM="${TEST_MEM:-512m}"
 
 mkdir -p "$(dirname "$RESULT_LOG")"
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$RESULT_LOG"; }
+
+# 生产密码直接从容器环境变量读，不写死在脚本里（也避免密码进 git）
+PROD_PASS="${PROD_PASS:-$(docker exec "$PROD_CONTAINER" printenv MYSQL_ROOT_PASSWORD 2>/dev/null)}"
+if [[ -z "$PROD_PASS" ]]; then
+    log "[ERROR] 读不到 ${PROD_CONTAINER} 的 MYSQL_ROOT_PASSWORD，容器没起来？"
+    exit 1
+fi
+
+# 临时恢复库
+# ★ 密码必须和生产库一致：全量备份里包含 mysql 系统库，恢复过程会把
+#   mysql.user 表一起还原，root@localhost 的认证串被改写成生产库的密码。
+#   如果临时库用另一个密码（比如 Restore@123），恢复完就连不上了 ——
+#   校验阶段读出空行数，看上去像「备份坏了」，其实是脚本自己把密码改了。
+TEST_CONTAINER="restore-test-$$"
+TEST_PASS="$PROD_PASS"
+# ★ 限制 512m：2G 机器上生产 MySQL 已占 300~500m，
+#   不设上限时 Docker 会把宿主机吃满，直接触发 OOM Kill 把生产库一起干掉。
+TEST_MEM="${TEST_MEM:-512m}"
 
 log "=========================================="
 log "备份恢复演练开始"
@@ -54,11 +64,15 @@ cleanup() {
 trap cleanup EXIT
 
 # 等待就绪（MySQL 首次启动要 40~90 秒）
+# ★ 不能用 mysqladmin ping 判断就绪：服务器拒绝认证时它同样返回 0
+#   （"as long as the server is running, ping succeeds"），于是脚本会在
+#   初始化还没结束、root 密码尚未生效时就开导，第一条语句 Access denied。
+#   必须用「带密码能真正执行一条 SQL」来判断。
 log "等待 MySQL 就绪..."
 READY=0
 for i in $(seq 1 60); do
     if docker exec -e MYSQL_PWD="$TEST_PASS" "$TEST_CONTAINER" \
-            mysqladmin ping -uroot --silent &>/dev/null; then
+            mysql -uroot -e 'SELECT 1' &>/dev/null; then
         log "  MySQL 就绪（等待 $((i * 2)) 秒）"
         READY=1
         break
