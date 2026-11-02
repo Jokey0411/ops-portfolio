@@ -11,7 +11,10 @@ RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
  && apk del .build-deps
 
 # ★ 关键：php-fpm 默认监听 127.0.0.1:9000，nginx 在另一个容器里连不上
-# 必须改成监听 0.0.0.0:9000（zz- 前缀保证该文件最后加载，覆盖默认配置）
+#   必须改成监听 0.0.0.0:9000（zz- 前缀保证该文件最后加载，覆盖默认配置）
+#   pm.max_children=8：2G 内存别设太大；max_requests=500 防内存泄漏累积
+# ★ 注意：这些 echo 行尾不能写注释——`#` 会把行尾续行符 `\` 一起吞掉，
+#   命令组不闭合，构建报 syntax error: unexpected end of file (expecting "}")
 RUN { \
       echo '[global]'; \
       echo 'daemonize = no'; \
@@ -19,11 +22,11 @@ RUN { \
       echo '[www]'; \
       echo 'listen = 0.0.0.0:9000'; \
       echo 'pm = dynamic'; \
-      echo 'pm.max_children = 8';      # 2G 内存，别设太大 \
+      echo 'pm.max_children = 8'; \
       echo 'pm.start_servers = 2'; \
       echo 'pm.min_spare_servers = 1'; \
       echo 'pm.max_spare_servers = 4'; \
-      echo 'pm.max_requests = 500';    # 防内存泄漏累积 \
+      echo 'pm.max_requests = 500'; \
       echo 'slowlog = /proc/self/fd/2'; \
       echo 'request_slowlog_timeout = 3s'; \
     } > /usr/local/etc/php-fpm.d/zz-docker.conf
