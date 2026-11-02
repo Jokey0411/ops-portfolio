@@ -107,6 +107,49 @@ crontab -e
 ```
 > 备份三件套：**数据库备份 + 代码备份 + 告警通知**，再加**心跳兜底**——脚本失败会告警，但如果 cron 没生效/机器重启过导致脚本根本没跑，只有心跳检测（查最新备份文件年龄）才能发现。告警渠道见 `scripts/notify.sh`（钉钉/飞书/邮件），需配 `/opt/ops/.env.notify`。
 
+### Step 9：Redis 缓存 + Session 共享
+
+**为什么加**：首页每次请求都要跑 3 条 `COUNT(*)`，30 万行的表上单次十几毫秒。这类「结果变化慢、查询开销大」的聚合最适合缓存。
+
+```bash
+docker compose up -d redis                 # 起缓存
+docker compose up -d --build php           # php 镜像里编译 phpredis（1~3 分钟）
+docker exec lnmp-php php -m | grep -i redis   # 必须输出 redis
+```
+
+**缓存读路径（cache-aside）**
+
+```
+请求 → 查 Redis ──命中(0.2ms)──→ 直接返回
+         │
+       未命中
+         ↓
+      查 MySQL(18ms) → 写回 Redis(TTL 60s) → 返回
+```
+
+**四条设计规则，每条都有原因**
+
+| 规则 | 为什么 |
+|---|---|
+| TTL 60 秒 | 缓存不是「数据的真相」，只是副本。TTL 决定**最多容忍多久的脏数据**，不设 TTL 就永远脏下去 |
+| `maxmemory 64mb` + `allkeys-lru` | 不设上限，Redis 会把 2G 机器吃光，然后被 Docker OOM Kill。LRU 保证内存到顶时**淘汰最久未用的**，而不是拒绝写入 |
+| `--save ""` 关闭持久化 | 缓存丢了可以回源重建，不需要 RDB。开着快照会让 Redis 定期 fork，2G 机器上写时复制很吃内存 |
+| **连不上就降级** | 代码里 Redis 连接失败会把 `$redis` 置空、直连 MySQL。**缓存是性能组件，不能变成可用性单点** |
+
+**为什么 Session 也放 Redis**
+
+PHP 默认把 session 写成文件，落在各自容器的 `/tmp`。一旦 php 扩到 2 个副本，用户的请求落到哪个容器就只能读哪个容器的会话文件 → 必须靠负载均衡做**会话粘滞**，等于放弃了水平扩容。存到 Redis 后，任意副本读到的都是同一份会话。
+
+**验证缓存生效**
+
+```bash
+curl -s http://127.0.0.1:8080/ | grep '缓存状态'     # 第一次 MISS 回源
+curl -s http://127.0.0.1:8080/ | grep '缓存状态'     # 第二次 HIT 命中
+curl -s 'http://127.0.0.1:8080/?nocache=1' | grep '缓存状态'   # BYPASS 强制回源
+```
+
+> 面试追问「你怎么知道缓存真的生效了」：页面直接把 MISS/HIT 打出来，加上 `?nocache=1` 强制回源做对照，压测时两组数字才有可比性。
+
 
 ---
 

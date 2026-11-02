@@ -4,10 +4,15 @@ FROM php:8.2-fpm-alpine
 RUN sed -i 's#dl-cdn.alpinelinux.org#mirrors.tuna.tsinghua.edu.cn#g' /etc/apk/repositories
 
 # 编译依赖（装完删掉，减小镜像层）
+# ★ pecl install redis 是「编译安装」，需要 $PHPIZE_DEPS 提供的 autoconf/gcc/make。
+#   官方 php-fpm 镜像里没有 pecl？有的，但缺编译器，所以必须挂在同一个 RUN 里，
+#   否则 apk del .build-deps 之后 pecl 就报 "phpize: not found"。
 RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
  && apk add --no-cache libzip-dev icu-dev \
  && docker-php-ext-configure opcache --enable-opcache \
  && docker-php-ext-install -j$(nproc) pdo_mysql mysqli opcache \
+ && pecl install redis \
+ && docker-php-ext-enable redis \
  && apk del .build-deps
 
 # ★ 关键：php-fpm 默认监听 127.0.0.1:9000，nginx 在另一个容器里连不上

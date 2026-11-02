@@ -36,11 +36,16 @@ services:
       DB_NAME: "shop"
       DB_USER: "app"
       DB_PASS: "App@123456"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
     networks:
       lnmp-net:
         ipv4_address: 172.30.0.11
     depends_on:
       mysql: { condition: service_healthy }
+      # 用 service_healthy 而不是 service_started：
+      # Redis 启动到能接受命令有几毫秒空窗，php 早起来会在首批请求上连接失败
+      redis: { condition: service_healthy }
 
   mysql:
     image: mysql:8.0
@@ -75,14 +80,39 @@ services:
       retries: 10
       start_period: 60s
 
-  # ---- 可选：Redis 缓存（约 8MB 内存，2G 机器可开，默认注释）----
-  # redis:
-  #   image: redis:7-alpine
-  #   container_name: lnmp-redis
-  #   command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
-  #   networks:
-  #     lnmp-net:
-  #       ipv4_address: 172.30.0.13
+  # ---- Redis：缓存 + PHP session 共享 ----
+  # 为什么两个用途都要：缓存是「性能」，session 是「有状态服务容器化」。
+  # PHP-FPM 默认把 session 写本地文件，一旦 php 扩到多个副本，
+  # 用户的会话就散落在各自容器里 → 必须做会话粘滞，等于无法水平扩容。
+  redis:
+    image: redis:7-alpine
+    container_name: lnmp-redis
+    hostname: lnmp-redis
+    # ★ --save "" 关闭 RDB 快照：缓存丢了可以回源重建，不需要持久化。
+    #   开着快照会让 Redis 定期 fork，2G 机器上 fork 的写时复制会吞内存。
+    # ★ maxmemory + allkeys-lru：内存到顶后淘汰最久未用的 key，
+    #   不会像不设限那样把 2G 机器吃光（Docker 的 mem_limit 会直接 OOM Kill）。
+    command:
+      - redis-server
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    mem_limit: 96m
+    restart: unless-stopped
+    networks:
+      lnmp-net:
+        ipv4_address: 172.30.0.13
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
 networks:
   lnmp-net:
