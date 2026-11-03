@@ -150,6 +150,33 @@ curl -s 'http://127.0.0.1:8080/?nocache=1' | grep '缓存状态'   # BYPASS 强�
 
 > 面试追问「你怎么知道缓存真的生效了」：页面直接把 MISS/HIT 打出来，加上 `?nocache=1` 强制回源做对照，压测时两组数字才有可比性。
 
+### Step 10：日志上限 —— 两个出口都要管
+
+**为什么**：`daemon.json` 里的 `max-size` 只管容器的 stdout/stderr。
+nginx 的 `access.log`、mysql 的 `slow.log` 写在 `./logs/` 挂载目录里，
+对 Docker 来说只是宿主机上的普通文件，**永远不会轮转**。
+
+```bash
+# A 出口：compose 用 x-logging 锚点给四个服务统一 10m×3，重建容器才生效
+docker compose up -d
+docker inspect --format '{{.Name}} {{json .HostConfig.LogConfig}}' lnmp-nginx lnmp-php lnmp-mysql lnmp-redis
+
+# B 出口：挂载日志交给 logrotate
+sudo cp logrotate/lnmp.conf /etc/logrotate.d/lnmp
+sudo chmod 644 /etc/logrotate.d/lnmp        # 组可写会被 logrotate 拒绝加载
+sudo logrotate -d /etc/logrotate.d/lnmp      # 先演练，看有没有 error
+sudo logrotate -f /etc/logrotate.d/lnmp      # 强制立刻转一次
+
+# ★ 验证：轮转后再访问一次，看新建的 .log 有没有内容
+curl -s -o /dev/null http://127.0.0.1:8080/
+ls -l logs/nginx/lnmp_access.log*
+```
+
+> **nginx 用 `USR1` 重开文件，mysql 只能 `copytruncate`** —— mysqld 没有「重新打开日志」
+> 的信号，用 rename + create 会让它一直写那个已改名的旧 inode，新的 `slow.log` 永远是 0 字节。
+> 而 nginx 那边，光看到 `.1` 出现不算成功，**必须看新 `.log` 有没有内容**。
+> 详见 [`docs/日志治理记录.md`](docs/日志治理记录.md)。
+
 
 ---
 
@@ -244,6 +271,8 @@ docker network inspect lnmp-p2_lnmp-net
 - [ ] 代码备份（`code_backup.sh`）有产物（`.bundle` / `.tar.gz`）
 - [ ] 心跳脚本（`backup_heartbeat.sh`）输出 `[SUCCESS] 心跳正常`
 - [ ] **恢复演练通过**
+- [ ] 四容器 `LogConfig` 都是 `max-size:10m, max-file:3`
+- [ ] `logs/nginx`、`logs/mysql` 已由 logrotate 纳管，轮转后新文件继续写入
 - [ ] crontab 已挂（库 03:00 / 代码 03:30 / 心跳 09:00）
 
 ---
