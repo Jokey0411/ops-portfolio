@@ -16,6 +16,19 @@ name: lnmp-p2
 #  ★ 10m × 3 = 单容器日志最多占 30MB，四个容器封顶 120MB。
 #    不设上限时 json-file 会一直追加，是 2C2G/40G 小机器被写满的常见原因。
 # =============================================================
+# =============================================================
+#  内存预算（2G 机器：总 1975M，系统常驻约 295M）
+#    mysql 768 + php 384 + nginx 128 + redis 96 = 1376M
+#    1376 + 295 = 1671M，余量约 304M（15%）
+#  ★ 数字来自「配置允许的理论峰值」，不是当前 RSS：
+#    mysql = innodb_buffer_pool 256M + log_buffer 16M + 基础开销 200M + 连接 buffer
+#    php   = pm.max_children(8) × 约 30M + master 20M
+#    当前 mysql 只占 190M，是因为几乎没流量——按这个数定上限等于按空载做规划。
+#  ★ 不设 mem_limit 的后果：任何容器都能吃满整机内存，
+#    内存耗尽时 OOM Killer 会挑 RSS 最大的进程杀，很可能错杀 mysql。
+#  ★ restart: unless-stopped —— 服务器重启、dockerd 重启后自动拉起；
+#    手动 docker stop 过的不会自己回来，这个语义正好符合预期。
+# =============================================================
 x-logging: &default-logging
   driver: json-file
   options:
@@ -33,6 +46,8 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./www:/var/www/html:rw
       - ./logs/nginx:/var/log/nginx
+    restart: unless-stopped
+    mem_limit: 128m
     logging: *default-logging
     networks:
       lnmp-net:
@@ -54,6 +69,8 @@ services:
       DB_PASS: "App@123456"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
+    restart: unless-stopped
+    mem_limit: 384m
     logging: *default-logging
     networks:
       lnmp-net:
@@ -87,6 +104,8 @@ services:
     # 端口不映射到宿主机：数据库只对本网络内的 php 暴露
     expose:
       - "3306"
+    restart: unless-stopped
+    mem_limit: 768m
     logging: *default-logging
     networks:
       lnmp-net:
