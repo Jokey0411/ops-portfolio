@@ -32,7 +32,7 @@ DBS=$(docker exec -e MYSQL_PWD="$MYSQL_PASS" "$CONTAINER" mysql -u"$MYSQL_USER" 
 
 if [[ -z "$DBS" ]]; then
     log "[ERROR] 无法获取数据库列表，容器可能未运行"
-    bash "$(dirname "$0")/../notify.sh" "LNMP备份失败" "无法连接 MySQL 容器 ${CONTAINER}" critical 2>/dev/null
+    bash "$(dirname "$0")/notify.sh" "LNMP备份失败" "无法连接 MySQL 容器 ${CONTAINER}" critical 2>/dev/null
     exit 1
 fi
 log "待备份数据库: $(echo $DBS | tr '\n' ' ')"
@@ -85,7 +85,7 @@ if [[ $FAILED -eq 0 ]]; then
 else
     log "[FAILED] 备份存在失败项，耗时 ${COST}s"
     log "STATUS=FAILED COST=${COST}s"
-    bash "$(dirname "$0")/../notify.sh" "❗LNMP MySQL 备份失败" \
+    bash "$(dirname "$0")/notify.sh" "❗LNMP MySQL 备份失败" \
          "容器 ${CONTAINER} 备份异常，检查 ${LOG_FILE}" critical 2>/dev/null
     exit 1
 fi

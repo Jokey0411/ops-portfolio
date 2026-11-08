@@ -10,7 +10,7 @@ set -uo pipefail
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/ops/backup}"
 MAX_AGE_HOURS="${MAX_AGE_HOURS:-26}"
 LOG_FILE="${LOG_FILE:-/opt/ops/logs/scripts/backup-heartbeat.log}"
-NOTIFY="$(cd "$(dirname "$0")/.." && pwd)/notify.sh"
+NOTIFY="$(cd "$(dirname "$0")" && pwd)/notify.sh"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }

@@ -10,7 +10,7 @@ APP_DIR="${APP_DIR:-/opt/ops/project2-lnmp/app}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/ops/backup/code}"
 LOG_FILE="${LOG_FILE:-/opt/ops/logs/scripts/code-backup.log}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
-NOTIFY="$(cd "$(dirname "$0")/.." && pwd)/notify.sh"
+NOTIFY="$(cd "$(dirname "$0")" && pwd)/notify.sh"
 
 DATE=$(date '+%Y%m%d_%H%M%S')
 mkdir -p "$BACKUP_DIR" "$(dirname "$LOG_FILE")"
