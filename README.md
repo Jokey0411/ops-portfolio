@@ -138,6 +138,7 @@ cd /opt/ops && find . -name "*.sh" -exec sed -i 's/\r$//' {} \; -exec chmod +x {
 
 | 文档 | 什么时候看 |
 |---|---|
+| `docs/09-项目知识点全解.md` | **零基础必读**：两个项目的全部知识点（Docker/Nginx/主从/索引/Redis/日志/内存账），每个点讲「是什么→为什么→项目怎么用→坑」 |
 | `docs/00-执行手册.md` | 动手前通读：三件事 + D0–D1 公共准备 |
 | `docs/06-项目一执行步骤.md` | **项目一专用**：起集群 → 主从 → 备份告警 → 故障演练 |
 | `docs/07-项目二执行步骤.md` | **项目二专用**：LNMP → 造数据 → 慢 SQL 优化 |
@@ -148,7 +149,7 @@ cd /opt/ops && find . -name "*.sh" -exec sed -i 's/\r$//' {} \; -exec chmod +x {
 | `docs/05-验收记录.md` | 跑一项填一项 |
 | `project1-cluster/docs/故障演练手册.md` | 亲手造故障、练排查 |
 | `project2-lnmp/docs/SQL优化记录.md` | 慢 SQL 优化前后对比 |
-| `docs/08-踩坑与修复记录.md` | **19 个真实故障的详解复盘**：现象→原理→定位→修法→换法对比→面试讲法 |
+| `docs/08-踩坑与修复记录.md` | **25 个真实故障的详解复盘**：现象→原理→定位→修法→换法对比→面试讲法 |
 | `interview/README.md` | 面试题库索引与复习路径 |
 
 ## License
